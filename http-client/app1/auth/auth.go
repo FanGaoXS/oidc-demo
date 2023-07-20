@@ -15,11 +15,10 @@ import (
 )
 
 var (
-	OidcIssuer    string
-	ClientID      string
-	ClientSecret  string
-	RedirectURL   string
-	ListenAddress string
+	OidcIssuer   string
+	ClientID     string
+	ClientSecret string
+	RedirectURL  string
 
 	s *storage.Storage
 )
@@ -30,7 +29,6 @@ func init() {
 	ClientID = env.ClientID
 	ClientSecret = env.ClientSecret
 	RedirectURL = env.RedirectURL
-	ListenAddress = env.ListenAddress
 
 	s = storage.New()
 }
