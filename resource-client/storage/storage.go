@@ -7,6 +7,7 @@ import (
 type repo struct {
 	Name      string
 	CreatedBy string
+	Client    string
 }
 
 type Storage struct {
@@ -30,7 +31,7 @@ func New() *Storage {
 	return instance
 }
 
-func (s *Storage) AddRepo(name, subject string) bool {
+func (s *Storage) AddRepo(name, subject, client string) bool {
 	if _, ok := s.set[name]; ok {
 		return false
 	}
@@ -38,6 +39,7 @@ func (s *Storage) AddRepo(name, subject string) bool {
 	r := &repo{
 		Name:      name,
 		CreatedBy: subject,
+		Client:    client,
 	}
 	s.repos = append(s.repos, r)
 	s.set[name] = struct{}{}

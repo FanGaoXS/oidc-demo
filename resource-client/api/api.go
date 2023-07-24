@@ -1,12 +1,12 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"github.com/coreos/go-oidc/v3/oidc"
+	"golang.org/x/oauth2"
 	"net/http"
-	"net/url"
-	"path/filepath"
 	"strings"
 
 	"oidc-demo/resource-client/environment"
@@ -28,34 +28,38 @@ func init() {
 }
 
 func AddRepo(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+
 	name := r.FormValue("name")
 	if name = strings.TrimSpace(name); name == "" {
 		http.Error(w, fmt.Sprintf("invalid repo name: empty repo name"), http.StatusBadRequest)
 		return
 	}
 
-	typ, accessToken, err := tokenFromHeader(r.Header)
+	token, err := tokenFromHeader(r.Header)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("get token from header failed: %s", err), http.StatusUnauthorized)
 		return
 	}
-	ui, err := getUserInfo(typ, accessToken)
+	ui, err := Userinfo(ctx, token)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("get userinfo failed: %s", err), http.StatusUnauthorized)
 		return
 	}
 
-	ok := s.AddRepo(name, ui.Subject)
+	ok := s.AddRepo(name, ui.Subject, ui.Audience)
 	fmt.Fprintf(w, "%t", ok)
 }
 
 func MyRepo(w http.ResponseWriter, r *http.Request) {
-	typ, accessToken, err := tokenFromHeader(r.Header)
+	ctx := r.Context()
+
+	token, err := tokenFromHeader(r.Header)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("get token from header failed: %s", err), http.StatusUnauthorized)
 		return
 	}
-	ui, err := getUserInfo(typ, accessToken)
+	ui, err := Userinfo(ctx, token)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("get userinfo failed: %s", err), http.StatusUnauthorized)
 		return
@@ -74,60 +78,40 @@ func AllRepo(w http.ResponseWriter, r *http.Request) {
 	w.Write(bytes)
 }
 
-func tokenFromHeader(header http.Header) (typ string, token string, err error) {
+func tokenFromHeader(header http.Header) (token string, err error) {
 	token = header.Get("Authorization")
 	splits := strings.SplitN(token, " ", 2)
 	if len(splits) < 2 {
-		return "", "", fmt.Errorf("invalid authorization: empty authorization")
+		return "", fmt.Errorf("invalid authorization: empty authorization")
 	}
 
-	typ = splits[0]
+	typ := splits[0]
 	token = splits[1]
 	if typ != "Bearer" && typ != "bearer" {
-		return "", "", fmt.Errorf("invalid authorization type: %s", typ)
+		return "", fmt.Errorf("invalid authorization type: %s", typ)
 	}
 
-	return typ, token, nil
+	return token, nil
 }
 
-func getUserInfo(typ, accessToken string) (*userinfo.Userinfo, error) {
-	client := http.DefaultClient
-
-	// get the configurations from {issuer}/.well-known/openid-configuration
-	u, _ := url.Parse(OidcIssuer)
-	u.Path = filepath.Join(u.Path, "/.well-known/openid-configuration")
-	res, err := client.Get(u.String())
+func Userinfo(ctx context.Context, accessToken string) (*userinfo.Userinfo, error) {
+	provider, err := oidc.NewProvider(ctx, OidcIssuer)
 	if err != nil {
-		return nil, fmt.Errorf("list openid-configuration from %s failed: %s", u.String(), err)
-	}
-	defer res.Body.Close()
-	if res.StatusCode != 200 {
-		msg, _ := ioutil.ReadAll(res.Body)
-		return nil, fmt.Errorf("list openid-configuration from %s failed: %s", u.String(), msg)
+		return nil, fmt.Errorf("init oidc provider failed: %s", err)
 	}
 
-	var configurations map[string]interface{}
-	if err = json.NewDecoder(res.Body).Decode(&configurations); err != nil {
-		return nil, fmt.Errorf("parse configurations from %s failed: %s", u.String(), err)
-	}
-
-	// get the userinfo from {issuer}/{userinfo_endpoint}
-	userinfoEndpoint := configurations["userinfo_endpoint"].(string)
-	req, _ := http.NewRequest("GET", userinfoEndpoint, nil)
-	req.Header.Set("Authorization", fmt.Sprintf("%s %s", typ, accessToken))
-	resp, err := client.Do(req)
+	// get userinfo from userinfo endpoint with access_token
+	ts := oauth2.StaticTokenSource(&oauth2.Token{AccessToken: accessToken})
+	providerUi, err := provider.UserInfo(ctx, ts)
 	if err != nil {
-		return nil, fmt.Errorf("get userinfo from %s failed: %s", u.String(), err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		msg, _ := ioutil.ReadAll(resp.Body)
-		return nil, fmt.Errorf("get userinfo from %s failed: %s", u.String(), msg)
+		return nil, fmt.Errorf("get userinfo from %s failed: %s", provider.UserInfoEndpoint(), err)
 	}
 
+	// parse provider userinfo into internal userinfo
 	var ui userinfo.Userinfo
-	if err = json.NewDecoder(resp.Body).Decode(&ui); err != nil {
-		return nil, fmt.Errorf("parse userinfo from %s failed: %s", userinfoEndpoint, err)
+	if err = providerUi.Claims(&ui); err != nil {
+		return nil, fmt.Errorf("parse userinfo from %s failed: %s", provider.UserInfoEndpoint(), err)
 	}
+
 	return &ui, nil
 }
